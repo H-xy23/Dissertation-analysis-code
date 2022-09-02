@@ -1,0 +1,1924 @@
+---
+title: "The code of flood frequency analysis in River Tweed"
+author: "Xinyu Hou"
+date: '2022-07-03'
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+##Install the packages used for analysis
+library(ggplot2)
+require(lattice)
+install.packages("fitdistrplus")
+library(fitdistrplus)
+library(tidyverse)
+library(dplyr)
+install.packages("lmomco")
+library(lmomco) 
+library(lmom)
+library(Lmoments)
+library(moments)
+library(goftest)
+install.packages("nsRFA")
+library(nsRFA)
+install.packages("FAdist") 
+library(FAdist)
+install.packages("EnvStats")
+library(EnvStats)
+```
+
+#This part is used to prepare the data for analysis.
+```{r}
+#input the data of one station among the five stations
+rm(list=ls())
+setwd('C:/Users/Stephanie/Desktop/dissertation')
+data_TP <- read.csv("Tweed-Peebles.csv") #such as read the file of data of Peebles here
+```
+
+```{r}
+#get the histogram of the orginal data set 
+ggplot(data = data_TP,aes(x = year, y = peak.flow)) + 
+  geom_bar(stat = 'identity', 
+           fill = "blue")+
+ylab(bquote('Annual Peak Flow ('*~m^3/s*')'))+
+xlab('Year')+
+  theme(axis.title.x=element_text(size=16),axis.title.y=element_text(size=16))
+```
+
+```{r}
+#use the boxplot to check the outliers in the data set
+ggplot(data=data_TP,aes(y=peak.flow))+
+             geom_boxplot(fill = "#0c4c8a")+
+  ylab(bquote('Annual Peak Flow ('*~m^3/s*')'))+
+  theme(axis.text.x = element_blank(),
+  axis.ticks.x= element_blank(),
+  axis.title.y=element_text(size=16))
+```
+
+```{r}
+#remove the outliers using the boxplot.stats function
+data_TPOUT <- boxplot.stats(data_TP$peak.flow)$out
+data_TP2 <- if(length(data_TPOUT)==0) data_TP else 
+     data_TP[-c(which(data_TP$peak.flow %in% c(data_TPOUT)) ),]
+```
+
+#This part of the code is used to estimate the nine distributions' parameters based on the MLE, MOM, and LMOM parameter estimation methods. In addition, we use the goodness-of-test, including the KS, AD, AIC, and BIC tests. As for the RMSE, since it is related to the estimation of the flood, we will put it into the code for the flood estimation, in which we can also get the estimation curves of every distribution with their own most suitable parameter estimation method.
+
+##Normal distribution
+```{r}
+## use Maximum Likelihood Estimation method to estimate parameters
+Normal_Mle <- fitdist(data_TP2$peak.flow,"norm",method="mle")
+estimate_norm_mu_Mle <- Normal_Mle$estimate[[1]]
+estimate_norm_sigma_Mle <- Normal_Mle$estimate[[2]]
+
+## use method of moments to estimate parameters
+Normal_Mom <- fitdist(data_TP2$peak.flow,"norm",method="mme")
+estimate_norm_mu_Mom <- Normal_Mom$estimate[[1]]
+estimate_norm_sigma_Mom <- Normal_Mom$estimate[[2]]
+
+## use method of L-moments to estimate parameters
+lmr_norm <- lmoms(data_TP2$peak.flow)
+PARnorm <- lmom2par(lmr_norm, type="nor")
+estimate_norm_mu_Lmom <- PARnorm$para[1]
+estimate_norm_sigma_Lmom <- PARnorm$para[2]
+```
+
+```{r}
+## use Kolmogorov-Smirnov test for MLE (MOM) and LMOM methods
+KS_Norm_MLE <- ks.test(data_TP2$peak.flow,"pnorm",estimate_norm_mu_Mle,estimate_norm_sigma_Mle )
+
+KS_Norm_LMOM <-ks.test(data_TP2$peak.flow,"pnorm",PARnorm$para[1],PARnorm$para[2])
+
+## use Anderson-Darling test for MLE (MOM) and LMOM methods
+ad.test_norm_Mle <- ad.test(data_TP2$peak.flow, "pnorm", mean=estimate_norm_mu_Mle, sd=estimate_norm_sigma_Mle)
+ad.test_norm_Lmom <- ad.test(data_TP2$peak.flow,"pnorm",PARnorm$para[1],PARnorm$para[2])
+```
+
+```{r}
+##define the function of AIC and BIC test with given loglik function, the number of parameters and the sample size
+Aic <- function(loglik,k,n){
+  result <- -2*loglik+2*k*n/(n-k-1)
+  return(result)
+}
+
+Bic <- function(loglik,k,n){
+  result <- -2*loglik+k*log(n)
+  return(result)
+}
+##define the loglik function for the NOR distribution
+loglik_Normal <- function(mu,sigma,x){
+  x <- as.matrix(x)
+  ll <- sum(dnorm(x,mean=mu,sd=sigma,log=T))
+  return(ll)
+}
+
+## get the AIC and BIC test results
+AIC_Norm_Mom_MLE<-Aic(loglik_Normal(estimate_norm_mu_Mle,estimate_norm_sigma_Mle,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+AIC_Norm_Lmom <- Aic(loglik_Normal(PARnorm$para[1],PARnorm$para[2],data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+BIC_Norm_Mom_MLE <-
+Bic(loglik_Normal(estimate_norm_mu_Mle,estimate_norm_sigma_Mle,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+BIC_Norm_Lmom <-
+Bic(loglik_Normal(PARnorm$para[1],PARnorm$para[2],data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+```
+
+## Two-parameter Log-Normal distribution
+```{r}
+## use Maximum Likelihood Estimation method to estimate parameters
+Lnormal_Mle <- fitdist(data_TP2$peak.flow,"lnorm",method="mle")
+estimate_lnorm_mu_Mle <- Lnormal_Mle$estimate[[1]]
+estimate_lnorm_sigma_Mle <- Lnormal_Mle$estimate[[2]]
+
+## use method of moments to estimate parameters
+Lnormal_Mom <- fitdist(data_TP2$peak.flow,"lnorm",method="mme")
+estimate_lnorm_mu_Mom <- Lnormal_Mom$estimate[[1]]
+estimate_lnorm_sigma_Mom <- Lnormal_Mom$estimate[[2]]
+
+## use method of L-moments to estimate parameters
+lmr_lnorm <- lmoms(log(data_TP2$peak.flow))
+PARlnorm <- lmom2par(lmr_lnorm, type="nor")
+estimate_lnorm_mu_Lmom <- PARlnorm$para[1]
+estimate_lnorm_sigma_Lmom <- PARlnorm$para[2]
+```
+
+```{r}
+## use Kolmogorov-Smirnov test
+KS_Lnorm_Mle <- ks.test(data_TP2$peak.flow,"plnorm",estimate_lnorm_mu_Mle,estimate_lnorm_sigma_Mle)
+
+KS_Lnorm_Mom <- ks.test(data_TP2$peak.flow,"plnorm",estimate_lnorm_mu_Mom,estimate_lnorm_sigma_Mom )
+
+KS_Lnorm_Lmom <-ks.test(data_TP2$peak.flow,"plnorm",PARlnorm$para[1],PARlnorm$para[2])
+```
+
+```{r}
+## use Anderson-Darling test 
+ad.test_lnorm_Mle <- ad.test(data_TP2$peak.flow, "plnorm", mean=estimate_lnorm_mu_Mle, sd=estimate_lnorm_sigma_Mle)
+
+ad.test_lnorm_Mom <- ad.test(data_TP2$peak.flow, "plnorm", mean=estimate_lnorm_mu_Mom, sd=estimate_lnorm_sigma_Mom)
+
+ad.test_lnorm_Lmom <- ad.test(data_TP2$peak.flow,"plnorm",PARlnorm$para[1],PARlnorm$para[2])
+```
+
+```{r}
+## define the loglik function for the LN2 distribution
+loglik_Lnormal <- function(mu,sigma,x){
+  x <- as.matrix(x)
+  ll <- sum(dlnorm(x, mu, sigma, log = T))
+  return(ll)
+}
+
+## get the AIC and BIC test results
+AIC_Lnorm_Mle <- 
+Aic(loglik_Lnormal(estimate_lnorm_mu_Mle,estimate_lnorm_sigma_Mle,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+AIC_Lnorm_Mom <- 
+Aic(loglik_Lnormal(estimate_lnorm_mu_Mom,estimate_lnorm_sigma_Mom,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+AIC_Lnorm_Lmom <- 
+Aic(loglik_Lnormal(PARlnorm$para[1],PARlnorm$para[2],data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+BIC_Lnorm_Mle <-
+Bic(loglik_Lnormal(estimate_lnorm_mu_Mle,estimate_lnorm_sigma_Mle,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+BIC_Lnorm_Mom <-
+Bic(loglik_Lnormal(estimate_lnorm_mu_Mom,estimate_lnorm_sigma_Mom,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+BIC_Lnorm_Lmom <-
+Bic(loglik_Lnormal(PARlnorm$para[1],PARlnorm$para[2],data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+```
+
+##Exponential Distribution
+
+```{r}
+##Since the results of parameter estimation using the MLE, MOM, and LMOM methods are the same, and the Mom method with the code here is more steady when using for the different data, so we just use MOM method here.
+
+## use method of moments to estimate parameters
+Exp_Mom <- fitdist(data_TP2$peak.flow,"exp",method="mme")
+estimate_exp_lambda_Mom <- Exp_Mom$estimate
+```
+
+```{r}
+## use Kolmogorov-Smirnov test 
+KS_Exp_Mom <- ks.test(data_TP2$peak.flow,"pexp", estimate_exp_lambda_Mom)
+```
+
+```{r}
+## use Anderson-Darling test 
+ad.test_exp_Mom <- ad.test(data_TP2$peak.flow, "pexp", estimate_exp_lambda_Mom)
+```
+
+```{r}
+## define the loglik function for the EXP distribution
+loglik_Exp <- function(lambda,x){
+  x <- as.matrix(x)
+  ll <- sum(dexp(x,lambda, log = T))
+  return(ll)
+}
+
+## get the AIC and BIC test results
+AIC_Exp_Lmom <- 
+Aic(loglik_Exp(estimate_exp_lambda_Lmom,data_TP2$peak.flow),1,length(data_TP2$peak.flow))
+
+BIC_Exp_Lmom <-
+Bic(loglik_Exp(estimate_exp_lambda_Lmom,data_TP2$peak.flow),1,length(data_TP2$peak.flow))
+```
+
+##Two-parameter Gamma distribution
+```{r}
+## use Maximum Likelihood Estimation method to estimate parameters
+Gamma_Mle <- fitdist(data_TP2$peak.flow,"gamma",method="mle")
+estimate_gamma_beta_Mle <- Gamma_Mle$estimate[[1]]
+estimate_gamma_alpha_Mle <- 1/Gamma_Mle$estimate[[2]]
+
+## use method of moments to estimate parameters
+Gamma_Mom <- fitdist(data_TP2$peak.flow,"gamma",method="mme")
+estimate_gamma_beta_Mom <- Gamma_Mom$estimate[[1]]
+estimate_gamma_alpha_Mom <- 1/Gamma_Mom$estimate[[2]]
+
+## use method of L-moments to estimate parameters
+lmr_gamma <- lmoms(data_TP2$peak.flow)
+PARgamma<- lmom2par(lmr_gamma, type="gam")
+estimate_gamma_beta_Lmom <- PARgamma$para[1]
+estimate_gamma_alpha_Lmom <- PARgamma$para[2]
+```
+
+```{r}
+## use Kolmogorov-Smirnov test
+KS_Gamma_Mle <- ks.test(data_TP2$peak.flow,"pgamma",estimate_gamma_beta_Mle,1/estimate_gamma_alpha_Mle)
+
+KS_Gamma_Mom <- ks.test(data_TP2$peak.flow,"pgamma",estimate_gamma_beta_Mom,1/estimate_gamma_alpha_Mom )
+
+KS_Gamma_Lmom <-ks.test(data_TP2$peak.flow,"pgamma",estimate_gamma_beta_Lmom,1/estimate_gamma_alpha_Lmom)
+```
+
+```{r}
+## use Anderson-Darling test 
+ad.test_gamma_Mle <- ad.test(data_TP2$peak.flow, "pgamma",estimate_gamma_beta_Mle,1/estimate_gamma_alpha_Mle)
+
+ad.test_gamma_Mom <- ad.test(data_TP2$peak.flow, "pgamma", estimate_gamma_beta_Mom, 1/estimate_gamma_alpha_Mom)
+
+ad.test_gamma_Lmom <- ad.test(data_TP2$peak.flow,"pgamma",estimate_gamma_beta_Lmom,1/estimate_gamma_alpha_Lmom)
+```
+
+```{r}
+## define the loglik function for the GAM distribution
+loglik_Gamma <- function(shape,rate,x){
+  x <- as.matrix(x)
+  ll <- sum(dgamma(x,shape,rate,log = T))
+  return(ll)
+}
+
+## get the AIC and BIC test results 
+AIC_gamma_Mle <- 
+Aic(loglik_Gamma(estimate_gamma_beta_Mle,1/estimate_gamma_alpha_Mle,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+AIC_gamma_Mom <- 
+Aic(loglik_Gamma(estimate_gamma_beta_Mom,1/estimate_gamma_alpha_Mom,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+AIC_gamma_Lmom <- 
+Aic(loglik_Gamma(estimate_gamma_beta_Lmom,1/estimate_gamma_alpha_Lmom,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+BIC_gamma_Mle <-
+Bic(loglik_Gamma(estimate_gamma_beta_Mle,1/estimate_gamma_alpha_Mle,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+BIC_gamma_Mom <-
+Bic(loglik_Gamma(estimate_gamma_beta_Mom,1/estimate_gamma_alpha_Mom,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+BIC_gamma_Lmom <-
+Bic(loglik_Gamma(estimate_gamma_beta_Lmom,1/estimate_gamma_alpha_Lmom,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+```
+
+##Pearson type 3 Distribution
+
+```{r}
+## use Maximum Likelihood Estimation method to estimate parameters
+Pearson3_Mle <- ML_estimation(data_TP2$peak.flow,"P3")
+estimate_pearson3_location_Mle <- Pearson3_Mle[1]
+estimate_pearson3_scale_Mle <- Pearson3_Mle[2]
+estimate_pearson3_shape_Mle <- Pearson3_Mle[3]
+
+## use method of moments to estimate parameters
+Pearson3_Mom<- moment_estimation(data_TP2$peak.flow,"P3")
+estimate_pearson3_location_Mom <- Pearson3_Mom[1]
+estimate_pearson3_scale_Mom <- Pearson3_Mom[2]
+estimate_pearson3_shape_Mom <- Pearson3_Mom[3]
+
+## use method of L-moments to estimate parameters
+lmoments <- Lmoments(data_TP2$peak.flow)
+para <- par.gamma(lmoments[1],lmoments[2],lmoments[4])
+
+estimate_pearson3_location_Lmom <-para $xi
+estimate_pearson3_scale_Lmom <- para $beta
+estimate_pearson3_shape_Lmom <- para $alfa
+```
+
+```{r}
+## use Kolmogorov-Smirnov test
+ks.test(data_TP2$peak.flow, "pgamma3", shape= estimate_pearson3_shape_Mle,
+scale =  estimate_pearson3_scale_Mle, 
+thres =  estimate_pearson3_location_Mle)
+
+ks.test(data_TP2$peak.flow, "pgamma3", shape = estimate_pearson3_shape_Mom,
+scale =  estimate_pearson3_scale_Mom, 
+thres =  estimate_pearson3_location_Mom)
+
+ks.test(data_TP2$peak.flow, "pgamma3", shape = estimate_pearson3_shape_Lmom,
+scale =  estimate_pearson3_scale_Lmom, 
+thres =  estimate_pearson3_location_Lmom)
+```
+
+```{r}
+## use Anderson-Darling test 
+Fit_P3_Mle <- F.gamma(data_TP2$peak.flow,estimate_pearson3_location_Mle,estimate_pearson3_scale_Mle,estimate_pearson3_shape_Mle )
+A2(sort(Fit_P3_Mle))
+
+Fit_P3_Mom <- F.gamma(data_TP2$peak.flow,estimate_pearson3_location_Mom,estimate_pearson3_scale_Mom,estimate_pearson3_shape_Mom )
+A2(sort(Fit_P3_Mom))
+
+Fit_P3_Lmom <- F.gamma(data_TP2$peak.flow,estimate_pearson3_location_Lmom,estimate_pearson3_scale_Lmom,estimate_pearson3_shape_Lmom )
+A2(sort(Fit_P3_Lmom))
+```
+
+```{r}
+## define the loglik function for the P3 distribution
+loglik_Pearson3 <- function(shape,scale,location,x){
+  x <- as.matrix(x)
+  ll <- sum(log(f.gamma(x,location,scale,shape)))
+  return(ll)
+}
+
+## get the AIC and BIC test results
+AIC_Pearson3_Mle <- Aic(loglik_Pearson3(estimate_pearson3_shape_Mle,estimate_pearson3_scale_Mle,estimate_pearson3_location_Mle,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+
+AIC_Pearson3_Mom <- Aic(loglik_Pearson3(estimate_pearson3_shape_Mom,estimate_pearson3_scale_Mom,estimate_pearson3_location_Mom,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+
+AIC_Pearson3_Lmom <- Aic(loglik_Pearson3(estimate_pearson3_shape_Lmom,estimate_pearson3_scale_Lmom,estimate_pearson3_location_Lmom,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+
+BIC_Pearson3_Mle <-
+Bic(loglik_Pearson3(estimate_pearson3_shape_Mle,estimate_pearson3_scale_Mle,estimate_pearson3_location_Mle,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+
+BIC_Pearson3_Mom <-
+Bic(loglik_Pearson3(estimate_pearson3_shape_Mom,estimate_pearson3_scale_Mom,estimate_pearson3_location_Mom,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+
+BIC_Pearson3_Lmom <-
+Bic(loglik_Pearson3(estimate_pearson3_shape_Lmom,estimate_pearson3_scale_Lmom,estimate_pearson3_location_Lmom,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+```
+
+##Log-Pearson type 3 distribution
+```{r}
+## use Maximum Likelihood Estimation method to estimate parameters
+LPearson3_Mle <- ML_estimation(log(data_TP2$peak.flow),"P3")
+estimate_lpearson3_location_Mle <- LPearson3_Mle[1]
+estimate_lpearson3_scale_Mle <- LPearson3_Mle[2]
+estimate_lpearson3_shape_Mle <- LPearson3_Mle[3]
+
+## use method of moments to estimate parameters
+LPearson3_Mom <- moment_estimation(log(data_TP2$peak.flow),"P3")
+estimate_lpearson3_location_Mom <- LPearson3_Mom[1]
+estimate_lpearson3_scale_Mom <- LPearson3_Mom[2]
+estimate_lpearson3_shape_Mom <- LPearson3_Mom[3]
+
+## use method of L-moments to estimate parameters
+lmr_lpe3 <- lmoms(log(data_TP2$peak.flow))
+PARlpe3 <- lmom2par(lmr_lpe3,type="pe3")
+mom2par.lpe3 <- mom2par.gamma(PARlpe3$para[1],PARlpe3$para[2],PARlpe3$para[2])
+estimate_lpearson3_location_Lmom <- mom2par.lpe3$xi
+estimate_lpearson3_scale_Lmom <- mom2par.lpe3$beta
+estimate_lpearson3_shape_Lmom <- mom2par.lpe3$alfa
+```
+
+
+```{r}
+## use Kolmogorov-Smirnov test 
+ks.test(log(data_TP2$peak.flow), "F.gamma", xi = estimate_lpearson3_location_Mle,
+alfa =  estimate_lpearson3_shape_Mle, 
+beta = estimate_lpearson3_scale_Mle)
+
+ks.test(log(data_TP2$peak.flow), "F.gamma", xi = estimate_lpearson3_location_Mom,
+alfa =  estimate_lpearson3_shape_Mom, 
+beta =  estimate_lpearson3_scale_Mom)
+
+ks.test(data_TP2$peak.flow, "plgamma3", thres = estimate_lpearson3_location_Lmom,
+shape =  estimate_lpearson3_shape_Lmom, 
+scale =  estimate_lpearson3_scale_Lmom)
+```
+
+```{r}
+## use Anderson-Darling test 
+Fit_LP3_Mle <- F.gamma(log(data_TP2$peak.flow),estimate_lpearson3_location_Mle,estimate_lpearson3_scale_Mle,estimate_lpearson3_shape_Mle )
+A2(sort(Fit_LP3_Mle))
+
+Fit_LP3_Mom <- F.gamma(log(data_TP2$peak.flow),estimate_lpearson3_location_Mom,estimate_lpearson3_scale_Mom,estimate_lpearson3_shape_Mom )
+A2(sort(Fit_LP3_Mom))
+
+Fit_LP3_Lmom <- F.gamma(log(data_TP2$peak.flow),estimate_lpearson3_location_Lmom,estimate_lpearson3_scale_Lmom,estimate_lpearson3_shape_Lmom )
+A2(sort(Fit_LP3_Lmom))
+```
+
+```{r}
+## We use the loglik function for the P3 distribution with given log(x) to represent the loglik function for the LP3 distribution
+## get the AIC and BIC test results
+AIC_LPearson3_Mle <- Aic(loglik_Pearson3(estimate_lpearson3_shape_Mle,estimate_lpearson3_scale_Mle,estimate_lpearson3_location_Mle,log(data_TP2$peak.flow)),3,length(log(data_TP2$peak.flow)))
+
+AIC_LPearson3_Mom <- Aic(loglik_Pearson3(estimate_lpearson3_shape_Mom,estimate_lpearson3_scale_Mom,estimate_lpearson3_location_Mom,log(data_TP2$peak.flow)),3,length(log(data_TP2$peak.flow)))
+
+AIC_LPearson3_Lmom <- Aic(loglik_Pearson3(estimate_lpearson3_shape_Lmom,estimate_lpearson3_scale_Lmom,estimate_lpearson3_location_Lmom,log(data_TP2$peak.flow)),3,length(log(data_TP2$peak.flow)))
+
+BIC_LPearson3_Mle <-
+Bic(loglik_Pearson3(estimate_lpearson3_shape_Mle,estimate_lpearson3_scale_Mle,estimate_lpearson3_location_Mle,log(data_TP2$peak.flow)),3,length(log(data_TP2$peak.flow)))
+
+BIC_LPearson3_Mom <-
+Bic(loglik_Pearson3(estimate_lpearson3_shape_Mom,estimate_lpearson3_scale_Mom,estimate_lpearson3_location_Mom,log(data_TP2$peak.flow)),3,length(log(data_TP2$peak.flow)))
+
+BIC_LPearson3_Lmom <-
+Bic(loglik_Pearson3(estimate_lpearson3_shape_Lmom,estimate_lpearson3_scale_Lmom,estimate_lpearson3_location_Lmom,log(data_TP2$peak.flow)),3,length(log(data_TP2$peak.flow)))
+```
+
+##Gneralized Extreme Value Distribution
+```{r}
+## use Maximum Likelihood Estimation method to estimate parameters
+GEV_Mle <- ML_estimation(data_TP2$peak.flow,"GEV")
+estimate_gev_location_Mle <- GEV_Mle[1]
+estimate_gev_scale_Mle <- GEV_Mle[2]
+estimate_gev_shape_Mle <- GEV_Mle[3]
+
+## use method of moments to estimate parameters
+GEV_Mom<- moment_estimation(data_TP2$peak.flow,"GEV")
+estimate_gev_location_Mom <- GEV_Mom[1]
+estimate_gev_scale_Mom <- GEV_Mom[2]
+estimate_gev_shape_Mom <- GEV_Mom[3]
+
+## use method of L-moments to estimate parameters
+lmr_gev <- lmoms(data_TP2$peak.flow)
+PARgev <- lmom2par(lmr_gev, type="gev")
+
+estimate_gev_location_Lmom <-PARgev$para[1]
+estimate_gev_scale_Lmom <- PARgev$para[2]
+estimate_gev_shape_Lmom <- PARgev$para[3]
+```
+
+```{r}
+## use Kolmogorov-Smirnov test
+ks.test(data_TP2$peak.flow, "pgev", shape = -estimate_gev_shape_Mle,
+scale =  estimate_gev_scale_Mle, 
+location=  estimate_gev_location_Mle)
+
+ks.test(data_TP2$peak.flow, "pgev", shape = -estimate_gev_shape_Mom,
+scale =  estimate_gev_scale_Mom, 
+location=  estimate_gev_location_Mom)
+
+ks.test(data_TP2$peak.flow, "pgev", shape = -estimate_gev_shape_Lmom,
+scale =  estimate_gev_scale_Lmom, 
+location=  estimate_gev_location_Lmom)
+
+```
+
+```{r}
+## use Anderson-Darling test 
+Fit_GEV_Mle <- F.GEV(data_TP2$peak.flow,estimate_gev_location_Mle,estimate_gev_scale_Mle,estimate_gev_shape_Mle )
+A2(sort(Fit_GEV_Mle))
+
+Fit_GEV_Mom <- F.GEV(data_TP2$peak.flow,estimate_gev_location_Mom,estimate_gev_scale_Mom,estimate_gev_shape_Mom )
+A2(sort(Fit_GEV_Mom))
+
+Fit_GEV_Lmom <- F.GEV(data_TP2$peak.flow,estimate_gev_location_Lmom,estimate_gev_scale_Lmom,estimate_gev_shape_Lmom )
+A2(sort(Fit_GEV_Lmom))
+```
+
+```{r}
+## define the loglik function for the GEV distribution
+loglik_Gev <- function(shape,scale,location,x){
+  x <- as.matrix(x)
+  ll <- sum(log(f.GEV(x,location,scale,shape)))
+  return(ll)
+}
+## get the AIC and BIC test results 
+AIC_Gev_Mle <- Aic(loglik_Gev(estimate_gev_shape_Mle,estimate_gev_scale_Mle,estimate_gev_location_Mle,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+
+AIC_Gev_Mom <- Aic(loglik_Gev(estimate_gev_shape_Mom,estimate_gev_scale_Mom,estimate_gev_location_Mom,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+
+AIC_Gev_Lmom <- Aic(loglik_Gev(estimate_gev_shape_Lmom,estimate_gev_scale_Lmom,estimate_gev_location_Lmom,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+
+BIC_Gev_Mle <-
+Bic(loglik_Gev(estimate_gev_shape_Mle,estimate_gev_scale_Mle,estimate_gev_location_Mle,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+
+BIC_Gev_Mom <-
+Bic(loglik_Gev(estimate_gev_shape_Mom,estimate_gev_scale_Mom,estimate_gev_location_Mom,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+
+BIC_Gev_Lmom <-
+Bic(loglik_Gev(estimate_gev_shape_Lmom,estimate_gev_scale_Lmom,estimate_gev_location_Lmom,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+```
+
+## Gumbel distribution
+
+```{r}
+## use Maximum Likelihood Estimation method to estimate parameters
+Gumbel_Mle <- ML_estimation(data_TP2$peak.flow,"GUMBEL")
+estimate_gumbel_location_Mle <- Gumbel_Mle[1]
+estimate_gumbel_scale_Mle <- Gumbel_Mle[2]
+
+## use method of moments to estimate parameters
+Gumbel_Mom<- moment_estimation(data_TP2$peak.flow,"GUMBEL")
+estimate_gumbel_location_Mom <- Gumbel_Mom[1]
+estimate_gumbel_scale_Mom <- Gumbel_Mom[2]
+
+## use method of L-moments to estimate parameters
+lmr_gum <- lmoms(data_TP2$peak.flow)
+PARgum <- lmom2par(lmr_gum, type="gum")
+estimate_gumbel_location_Lmom <-PARgum$para[1]
+estimate_gumbel_scale_Lmom <- PARgum$para[2]
+```
+
+```{r}
+## use Kolmogorov-Smirnov test
+ks.test(data_TP2$peak.flow, "pgumbel",  location=estimate_gumbel_location_Mle,
+scale=estimate_gumbel_scale_Mle)
+
+ks.test(data_TP2$peak.flow, "pgumbel", location = estimate_gumbel_location_Mom,
+scale =  estimate_gumbel_scale_Mom)
+
+ks.test(data_TP2$peak.flow, "pgumbel", location = estimate_gumbel_location_Lmom,
+scale =  estimate_gumbel_scale_Lmom)
+```
+
+```{r}
+## use Anderson-Darling test 
+Fit_gumbel_Mle <- F.gumb(data_TP2$peak.flow,estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle)
+A2(sort(Fit_gumbel_Mle))
+
+Fit_gumbel_Mom <- F.gumb(data_TP2$peak.flow,estimate_gumbel_location_Mom,estimate_gumbel_scale_Mom)
+A2(sort(Fit_gumbel_Mom))
+
+Fit_gumbel_Lmom <- F.gumb(data_TP2$peak.flow,estimate_gumbel_location_Lmom,estimate_gumbel_scale_Lmom)
+A2(sort(Fit_gumbel_Lmom))
+```
+
+```{r}
+## define the loglik function for the EV1 distribution
+loglik_Gumbel <- function(location,scale,x){
+  x <- as.matrix(x)
+  ll <- sum(log(f.gumb(x,location,scale)))
+  return(ll)
+}
+
+## get the AIC and BIC test results
+AIC_Gumbel_Mle <- Aic(loglik_Gumbel(estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+AIC_Gumbel_Mom <- Aic(loglik_Gumbel(estimate_gumbel_location_Mom,estimate_gumbel_scale_Mom,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+AIC_Gumbel_Lmom <- Aic(loglik_Gumbel(estimate_gumbel_location_Lmom,estimate_gumbel_scale_Lmom,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+BIC_Gumbel_Mle <-
+Bic(loglik_Gumbel(estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+
+BIC_Gumbel_Mom <-
+Bic(loglik_Gumbel(estimate_gumbel_location_Mom,estimate_gumbel_scale_Mom,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+
+BIC_Gumbel_Lmom <-
+Bic(loglik_Gumbel(estimate_gumbel_location_Lmom,estimate_gumbel_scale_Lmom,data_TP2$peak.flow),3,length(data_TP2$peak.flow))
+```
+
+## Two-parameter Weibull distribution
+
+```{r}
+## use Maximum Likelihood Estimation method to estimate parameters
+Weibull_Mle <-  eweibull(data_TP2$peak.flow, method = "mle")
+estimate_w2_shape_Mle <- Weibull_Mle$parameters[[1]]
+estimate_w2_scale_Mle <- Weibull_Mle$parameters[[2]]
+
+## use method of moments to estimate parameters
+Weibull_Mom <-  eweibull(data_TP2$peak.flow, method = "mme")
+estimate_w2_shape_Mom <- Weibull_Mom$parameters[[1]]
+estimate_w2_scale_Mom <- Weibull_Mom$parameters[[2]]
+
+## use method of L-moments to estimate parameters
+lmr_w2 <- lmoms(data_TP2$peak.flow)
+m1 <- lmr_w2$lambdas[1]
+m2 <- lmr_w2$lambdas[2]
+
+estimate_w2_shape_Lmom <- -log(2)/log(1-m2/m1)
+estimate_w2_scale_Lmom <- m1/gamma(1/estimate_w2_shape_Lmom+1)
+```
+
+```{r}
+## use Kolmogorov-Smirnov test
+KS_w2_MLE <- ks.test(data_TP2$peak.flow,"pweibull",estimate_w2_shape_Mle,estimate_w2_scale_Mle )
+
+KS_w2_MOM <-ks.test(data_TP2$peak.flow,"pweibull",estimate_w2_shape_Mom,estimate_w2_scale_Mom)
+
+KS_w2_Lmom <-ks.test(data_TP2$peak.flow,"pweibull",estimate_w2_shape_Lmom,estimate_w2_scale_Lmom)
+```
+
+```{r}
+## use Anderson-Darling test 
+ad.test_w2_Mle <- ad.test(data_TP2$peak.flow, "pweibull", estimate_w2_shape_Mle, estimate_w2_scale_Mle)
+
+ad.test_w2_Mom <- ad.test(data_TP2$peak.flow, "pweibull", estimate_w2_shape_Mom, estimate_w2_scale_Mom)
+
+ad.test_w2_Lmom <- ad.test(data_TP2$peak.flow, "pweibull", estimate_w2_shape_Lmom, estimate_w2_scale_Lmom)
+```
+
+```{r}
+## define the loglik function for the W2 distribution
+loglik_Weibull <- function(shape,scale,x){
+  x <- as.matrix(x)
+  ll <- sum(dweibull(x,shape=shape,scale=scale,log=T))
+  return(ll)
+}
+
+## get the AIC and BIC test results
+AIC_w2_Mle <- Aic(loglik_Weibull(estimate_w2_shape_Mle,estimate_w2_scale_Mle,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+AIC_w2_Mom <- Aic(loglik_Weibull(estimate_w2_shape_Mom,estimate_w2_scale_Mom,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+AIC_w2_Lmom <- Aic(loglik_Weibull(estimate_w2_shape_Lmom,estimate_w2_scale_Lmom,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+BIC_w2_Mle <- Bic(loglik_Weibull(estimate_w2_shape_Mle,estimate_w2_scale_Mle,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+BIC_w2_Mom <- Bic(loglik_Weibull(estimate_w2_shape_Mom,estimate_w2_scale_Mom,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+
+BIC_w2_Lmom <- Bic(loglik_Weibull(estimate_w2_shape_Lmom,estimate_w2_scale_Lmom,data_TP2$peak.flow),2,length(data_TP2$peak.flow))
+```
+
+#This part of the code is used for the flood freuquency analysis models based on different distributions. We will also get the RMSE results for every parameter estimation method used for the distributions.
+
+```{r}
+#combine the data set with its corresponding return period into one data frame
+sort_tp <- sort(data_TP2$peak.flow,decreasing=FALSE)
+order <- seq(from=1,to=length(data_TP2$peak.flow),by=1)
+data_TP3 <- data.frame(order,sort_tp)
+data_TP3$P_tp <- data_TP3$order /(length(data_TP2$peak.flow)+1)
+data_TP3$T_tp <- 1/(1-data_TP3$P_tp)
+```
+
+```{r}
+##the flood frequency analysis model for NOR distribution and the RMSE results 
+Estimate_X_norm_TP_mle <- qnorm(1-1/data_TP3$T_tp,estimate_norm_mu_Mle,estimate_norm_sigma_Mle)
+
+RMSE_normal_mle <-sqrt(sum((data_TP3$sort_tp-Estimate_X_norm_TP_mle )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_norm_TP_lmom <- qnorm(1-1/data_TP3$T_tp,estimate_norm_mu_Lmom,estimate_norm_sigma_Lmom)
+
+RMSE_normal_lmom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_norm_TP_lmom )^2)/length(data_TP3$sort_tp))
+
+##the flood frequency analysis model for LN2 distribution and the RMSE results 
+Estimate_X_lnorm_TP_mle <- qlnorm(1-1/data_TP3$T_tp,estimate_lnorm_mu_Mle,estimate_lnorm_sigma_Mle)
+
+RMSE_lnormal_mle <-sqrt(sum((data_TP3$sort_tp-Estimate_X_lnorm_TP_mle )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_lnorm_TP_mom <- qlnorm(1-1/data_TP3$T_tp,estimate_lnorm_mu_Mom,estimate_lnorm_sigma_Mom)
+
+RMSE_lnormal_mom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_lnorm_TP_mom )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_lnorm_TP_lmom <- qlnorm(1-1/data_TP3$T_tp,estimate_lnorm_mu_Lmom,estimate_lnorm_sigma_Lmom)
+
+RMSE_lnormal_lmom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_lnorm_TP_lmom )^2)/length(data_TP3$sort_tp))
+
+##the flood frequency analysis model for EXP distribution and the RMSE results 
+Estimate_X_exp_TP_mom <- qexp(1-1/data_TP3$T_tp,estimate_exp_lambda_Mom)
+
+RMSE_exp_mom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_exp_TP_mom )^2)/length(data_TP3$sort_tp))
+
+##the flood frequency analysis model for GAM distribution and the RMSE results 
+Estimate_X_gamma_TP_mle <- qgamma(1-1/data_TP3$T_tp,estimate_gamma_beta_Mle,1/estimate_gamma_alpha_Mle)
+
+RMSE_gamma_mle <-sqrt(sum((data_TP3$sort_tp-Estimate_X_gamma_TP_mle )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_gamma_TP_mom <- qgamma(1-1/data_TP3$T_tp,estimate_gamma_beta_Mom,1/estimate_gamma_alpha_Mom)
+
+RMSE_gamma_mom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_gamma_TP_mom )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_gamma_TP_lmom <- qgamma(1-1/data_TP3$T_tp,estimate_gamma_beta_Lmom,1/estimate_gamma_alpha_Lmom)
+
+RMSE_gamma_lmom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_gamma_TP_lmom )^2)/length(data_TP3$sort_tp))
+
+##the flood frequency analysis model for P3 distribution and the RMSE results 
+Estimate_X_p3_TP_mle <- qgamma3(1-1/data_TP3$T_tp,estimate_pearson3_shape_Mle,estimate_pearson3_scale_Mle,estimate_pearson3_location_Mle)
+
+RMSE_p3_mle <-sqrt(sum((data_TP3$sort_tp-Estimate_X_p3_TP_mle )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_p3_TP_mom <- qgamma3(1-1/data_TP3$T_tp,estimate_pearson3_shape_Mom,estimate_pearson3_scale_Mom,estimate_pearson3_location_Mom)
+
+RMSE_p3_mom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_p3_TP_mom )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_p3_TP_lmom <- qgamma3(1-1/data_TP3$T_tp,estimate_pearson3_shape_Lmom,estimate_pearson3_scale_Lmom,estimate_pearson3_location_Lmom)
+
+RMSE_p3_lmom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_p3_TP_lmom )^2)/length(data_TP3$sort_tp))
+
+##the flood frequency analysis model for LP3 distribution and the RMSE results 
+Estimate_X_lp3_TP_mle <-exp(invF.gamma(data_TP3$P_tp
+,estimate_lpearson3_location_Mle,estimate_lpearson3_scale_Mle,estimate_lpearson3_shape_Mle))
+
+RMSE_lp3_mle <-sqrt(sum((data_TP3$sort_tp-Estimate_X_lp3_TP_mle )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_lp3_TP_mom <- exp(invF.gamma(data_TP3$P_tp
+,estimate_lpearson3_location_Mom,estimate_lpearson3_scale_Mom,estimate_lpearson3_shape_Mom))
+
+RMSE_lp3_mom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_lp3_TP_mom )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_lp3_TP_lmom <- exp(invF.gamma(data_TP3$P_tp
+,estimate_lpearson3_location_Lmom,estimate_lpearson3_scale_Lmom,estimate_lpearson3_shape_Lmom))
+
+RMSE_lp3_lmom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_lp3_TP_lmom )^2)/length(data_TP3$sort_tp))
+
+##the flood frequency analysis model for GEV distribution and the RMSE results 
+Estimate_X_gev_TP_mle <-invF.GEV(data_TP3$P_tp
+,estimate_gev_location_Mle,estimate_gev_scale_Mle,estimate_gev_shape_Mle)
+
+RMSE_gev_mle <-sqrt(sum((data_TP3$sort_tp-Estimate_X_gev_TP_mle )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_gev_TP_mom <- invF.GEV(data_TP3$P_tp
+,estimate_gev_location_Mom,estimate_gev_scale_Mom,estimate_gev_shape_Mom)
+
+RMSE_gev_mom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_gev_TP_mom )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_gev_TP_lmom <- invF.GEV(data_TP3$P_tp
+,estimate_gev_location_Lmom,estimate_gev_scale_Lmom,estimate_gev_shape_Lmom)
+
+RMSE_gev_lmom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_gev_TP_lmom )^2)/length(data_TP3$sort_tp))
+
+##the flood frequency analysis model for EV1 distribution and the RMSE results 
+Estimate_X_gumbel_TP_mle <-invF.gumb(data_TP3$P_tp
+,estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle)
+
+RMSE_gumbel_mle <-sqrt(sum((data_TP3$sort_tp-Estimate_X_gumbel_TP_mle )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_gumbel_TP_mom <- invF.gumb(data_TP3$P_tp
+,estimate_gumbel_location_Mom,estimate_gumbel_scale_Mom)
+
+RMSE_gumbel_mom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_gumbel_TP_mom )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_gumbel_TP_lmom <- invF.gumb(data_TP3$P_tp
+,estimate_gumbel_location_Lmom,estimate_gumbel_scale_Lmom)
+
+RMSE_gumbel_lmom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_gumbel_TP_lmom )^2)/length(data_TP3$sort_tp))
+
+##the flood frequency analysis model for W2 distribution and the RMSE results 
+Estimate_X_w2_TP_mle <- qweibull(1-1/data_TP3$T_tp,estimate_w2_shape_Mle,estimate_w2_scale_Mle)
+
+RMSE_w2_mle <-sqrt(sum((data_TP3$sort_tp-Estimate_X_w2_TP_mle )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_w2_TP_mom <- qweibull(1-1/data_TP3$T_tp,estimate_w2_shape_Mom,estimate_w2_scale_Mom)
+
+RMSE_w2_mom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_w2_TP_mom )^2)/length(data_TP3$sort_tp))
+
+Estimate_X_w2_TP_lmom <- qweibull(1-1/data_TP3$T_tp,estimate_w2_shape_Lmom,estimate_w2_scale_Lmom)
+
+RMSE_w2_lmom <-sqrt(sum((data_TP3$sort_tp-Estimate_X_w2_TP_lmom )^2)/length(data_TP3$sort_tp))
+```
+
+#This part of the code is only used for the data of the station at Peebles, we will get the figure including the curves of the flood frequency analysis models, which representing the distributions with their appropriate parameter estimation methods. And then we will use the AIC and BIC test for the flood frequency analysis models, and other test results we have got before.
+```{r}
+##the estimated data based on different distributions with suitable estimation methods 
+data_TP3$Estimate_X_norm_TP_mle <- Estimate_X_norm_TP_mle
+data_TP3$Estimate_X_lnorm_TP_mle <- Estimate_X_lnorm_TP_mle
+data_TP3$Estimate_X_exp_TP_mom <- Estimate_X_exp_TP_mom
+data_TP3$Estimate_X_gamma_TP_mle <- Estimate_X_gamma_TP_mle
+data_TP3$Estimate_X_p3_TP_mle <- Estimate_X_p3_TP_mle
+data_TP3$Estimate_X_lp3_TP_mom <- Estimate_X_lp3_TP_mom
+data_TP3$Estimate_X_gev_TP_lmom <- Estimate_X_gev_TP_lmom
+data_TP3$Estimate_X_gumbel_TP_mle <- Estimate_X_gumbel_TP_mle
+data_TP3$Estimate_X_w2_TP_mle <- Estimate_X_w2_TP_mle
+```
+
+```{r}
+##add all the lines representing the flood frequency analysis models in a plot
+model_normal_tp=function(x,y){
+  y=qnorm(1-1/x,estimate_norm_mu_Mle,estimate_norm_sigma_Mle)}
+
+model_lnormal_tp=function(x,y){
+  y=qlnorm(1-1/x,estimate_lnorm_mu_Mle,estimate_lnorm_sigma_Mle)}
+
+model_exp_tp=function(x,y){
+  y=qexp(1-1/x,estimate_exp_lambda_Mom)}
+
+model_gamma_tp=function(x,y){
+  y=qgamma(1-1/x,estimate_gamma_beta_Mle,1/estimate_gamma_alpha_Mle)}
+
+model_p3_tp=function(x,y){
+  y=qgamma3(1-1/x,estimate_pearson3_shape_Mle,estimate_pearson3_scale_Mle,estimate_pearson3_location_Mle)}
+
+model_lp3_tp=function(x,y){
+  y=exp(invF.gamma(1-1/x
+,estimate_lpearson3_location_Mom,estimate_lpearson3_scale_Mom,estimate_lpearson3_shape_Mom))}
+
+model_gev_tp=function(x,y){
+  y=invF.GEV(1-1/x
+,estimate_gev_location_Lmom,estimate_gev_scale_Lmom,estimate_gev_shape_Lmom)}
+
+model_gumbel_tp=function(x,y){
+  y=invF.gumb(1-1/x
+,estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle)}
+
+model_weibull_tp=function(x,y){
+  y=qweibull(1-1/x
+,estimate_w2_shape_Mle,estimate_w2_scale_Mle)
+}
+```
+
+```{r}
+##make sure that the length of the return period is same as the length of the data set so that they can be put in a data frame used for the plot 
+T <- seq(1.5,150,150/(length(data_TP3$T_tp)))
+data_TP3$T <- T
+ggplot(data_TP3,aes(x=T))+
+  geom_point(aes(x=data_TP3$T_tp,y=data_TP3$sort_tp))+
+  geom_function(fun=model_normal_tp,aes(color="NOR-MLE/MOM"))+
+  geom_function(fun=model_lnormal_tp,aes(color="LN2-MLE"))+
+  geom_function(fun=model_exp_tp,aes(color="EXP-MLE/MOM/LMOM"))+
+  geom_function(fun=model_gamma_tp,aes(color="GAM-MLE"))+
+  geom_function(fun=model_p3_tp,aes(color="P3-MLE"))+
+  geom_function(fun=model_lp3_tp,aes(color="LP3-MOM"))+
+  geom_function(fun=model_gev_tp,aes(color="GEV-LMOM"))+
+  geom_function(fun=model_gumbel_tp,aes(color="EV1-MLE"))+
+  geom_function(fun=model_weibull_tp,aes(color="W2-MLE"))+
+   
+ ylab(bquote('Discharge ('*~m^3/s*')')) +
+  xlab("Return Period (year)") +
+  guides(colour = guide_legend(title = ""))+
+  scale_y_continuous(breaks =seq(0,1000,100))
+
+
+ggplot(data_TP3,aes(x=T))+
+  geom_point(aes(x=data_TP3$T_tp,y=data_TP3$sort_tp))+
+  geom_function(fun=model_normal_tp,aes(color="NOR-MLE/MOM"))+
+  geom_function(fun=model_lnormal_tp,aes(color="LN2-MLE"))+
+  geom_function(fun=model_gamma_tp,aes(color="GAM-MLE"))+
+  geom_function(fun=model_p3_tp,aes(color="P3-MLE"))+
+  geom_function(fun=model_lp3_tp,aes(color="LP3-MOM"))+
+  geom_function(fun=model_gev_tp,aes(color="GEV-LMOM"))+
+  geom_function(fun=model_gumbel_tp,aes(color="EV1-MLE"))+
+  geom_function(fun=model_weibull_tp,aes(color="W2-MLE"))+
+   
+ ylab(bquote('Discharge ('*~m^3/s*')')) +
+  xlab("Return Period (year)") +
+  guides(colour = guide_legend(title = ""))
+ scale_y_continuous(breaks =seq(0,500,80))
+```
+
+
+```{r}
+##apply the AIC and BIC test for flood frequency analysis models based on various distributions
+
+## NOR distribution
+loglick_model_norm_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qnorm(1-1/x,estimate_norm_mu_Mle,estimate_norm_sigma_Mle)))
+  return(ll)
+}
+Aic(loglick_model_norm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_norm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## LN2 distribution
+loglick_model_lnorm_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qlnorm(1-1/x,estimate_lnorm_mu_Mle,estimate_lnorm_sigma_Mle)))
+  return(ll)
+}
+Aic(loglick_model_lnorm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_lnorm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## EXP distribution
+loglick_model_exp_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qexp(1-1/x,estimate_exp_lambda_Mom)))
+  return(ll)
+}
+Aic(loglick_model_exp_tp(data_TP3$T_tp),1,length(data_TP3$T_tp))
+Bic(loglick_model_exp_tp(data_TP3$T_tp),1,length(data_TP3$T_tp))
+
+## GAM distribution
+loglick_model_gamma_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qgamma(1-1/x,estimate_gamma_beta_Mle,1/estimate_gamma_alpha_Mle)))
+  return(ll)
+}
+
+Aic(loglick_model_gamma_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_gamma_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## P3 distribution
+loglick_model_p3_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qgamma3(1-1/x,estimate_pearson3_shape_Mle,estimate_pearson3_scale_Mle,estimate_pearson3_location_Mle)))
+  return(ll)
+}
+
+
+Aic(loglick_model_p3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_p3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+## LP3 distribution
+loglick_model_lp3_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(exp(invF.gamma(1-1/x
+,estimate_lpearson3_location_Mom,estimate_lpearson3_scale_Mom,estimate_lpearson3_shape_Mom))))
+  return(ll)
+}
+Aic(loglick_model_lp3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_lp3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+## GEV distribution
+loglick_model_gev_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(invF.GEV(1-1/x
+,estimate_gev_location_Lmom,estimate_gev_scale_Lmom,estimate_gev_shape_Lmom)))
+  return(ll)
+}
+Aic(loglick_model_gev_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_gev_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+## EV1 distribution
+loglick_model_gumbel_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(invF.gumb(1-1/x
+,estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle)))
+  return(ll)
+}
+Aic(loglick_model_gumbel_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_gumbel_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+##W2 distribution
+loglick_model_w2_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qweibull(1-1/x,estimate_w2_shape_Mle,estimate_w2_scale_Mle)))
+  return(ll)
+}
+Aic(loglick_model_w2_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_w2_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+```
+
+```{r}
+##get the flood estimation with specific return period based on the most suitable distribution for this station
+return_period <- c(2,5,10,20,50,100,125,150)
+flood_estimation <- invF.GEV(1-1/return_period 
+,estimate_gev_location_Lmom,estimate_gev_scale_Lmom,estimate_gev_shape_Lmom)
+```
+
+#This part of the code is only used for the data of the station at Norham, we will get the figure including the curves of the flood frequency analysis models, which representing the distributions with their appropriate parameter estimation methods. And then we will use the AIC and BIC test for the flood frequency analysis models, and other test results we have got before.
+```{r}
+##the estimated data based on different distributions with suitable estimation methods 
+data_TP3$Estimate_X_norm_TP_lmom <- Estimate_X_norm_TP_lmom
+data_TP3$Estimate_X_lnorm_TP_mle <- Estimate_X_lnorm_TP_mle
+data_TP3$Estimate_X_exp_TP_mom <- Estimate_X_exp_TP_mom
+data_TP3$Estimate_X_gamma_TP_lmom <- Estimate_X_gamma_TP_lmom
+data_TP3$Estimate_X_p3_TP_lmom <- Estimate_X_p3_TP_lmom
+data_TP3$Estimate_X_lp3_TP_mom <- Estimate_X_lp3_TP_mom
+data_TP3$Estimate_X_gev_TP_lmom <- Estimate_X_gev_TP_lmom
+data_TP3$Estimate_X_gumbel_TP_mle <- Estimate_X_gumbel_TP_mle
+data_TP3$Estimate_X_w2_TP_mle <- Estimate_X_w2_TP_mle
+```
+
+```{r}
+##add all the lines representing the flood frequency analysis models in a plot
+model_normal_tp=function(x,y){
+  y=qnorm(1-1/x,estimate_norm_mu_Lmom,estimate_norm_sigma_Lmom)}
+
+model_lnormal_tp=function(x,y){
+  y=qlnorm(1-1/x,estimate_lnorm_mu_Mle,estimate_lnorm_sigma_Mle)}
+
+model_exp_tp=function(x,y){
+  y=qexp(1-1/x,estimate_exp_lambda_Mom)}
+
+model_gamma_tp=function(x,y){
+  y=qgamma(1-1/x,estimate_gamma_beta_Lmom,1/estimate_gamma_alpha_Lmom)}
+
+model_p3_tp=function(x,y){
+  y=qgamma3(1-1/x,estimate_pearson3_shape_Lmom,estimate_pearson3_scale_Lmom,estimate_pearson3_location_Lmom)}
+
+model_lp3_tp=function(x,y){
+  y=exp(invF.gamma(1-1/x
+,estimate_lpearson3_location_Mom,estimate_lpearson3_scale_Mom,estimate_lpearson3_shape_Mom))}
+
+
+model_gev_tp=function(x,y){
+  y=invF.GEV(1-1/x
+,estimate_gev_location_Lmom,estimate_gev_scale_Lmom,estimate_gev_shape_Lmom)}
+
+model_gumbel_tp=function(x,y){
+  y=invF.gumb(1-1/x
+,estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle)}
+
+model_weibull_tp=function(x,y){
+  y=qweibull(1-1/x
+,estimate_w2_shape_Mle,estimate_w2_scale_Mle)
+}
+```
+
+
+```{r}
+##make sure that the length of the return period is same as the length of the data set so that they can be put in a data frame used for the plot 
+T <- seq(1,150,150/(length(data_TP3$T_tp)))
+data_TP3$T <- T
+ggplot(data_TP3,aes(x=T))+
+  geom_point(aes(x=data_TP3$T_tp,y=data_TP3$sort_tp))+
+  geom_function(fun=model_normal_tp,aes(color="NOR-LMOM"))+
+  geom_function(fun=model_lnormal_tp,aes(color="LN2-MLE"))+
+  geom_function(fun=model_exp_tp,aes(color="EXP-MLE/MOM/LMOM"))+
+  geom_function(fun=model_gamma_tp,aes(color="GAM-LMOM"))+
+  geom_function(fun=model_p3_tp,aes(color="P3-LMOM"))+
+  geom_function(fun=model_lp3_tp,aes(color="LP3-MOM"))+
+  geom_function(fun=model_gev_tp,aes(color="GEV-LMOM"))+
+  geom_function(fun=model_gumbel_tp,aes(color="EV1-MLE"))+
+  geom_function(fun=model_weibull_tp,aes(color="W2-MLE"))+
+   
+ ylab(bquote('Discharge ('*~m^3/s*')')) +
+  xlab("Return Period (year)") +
+  guides(colour = guide_legend(title = ""))+
+  scale_y_continuous(breaks =seq(0,6000,400))
+
+
+ggplot(data_TP3,aes(x=T))+
+ geom_point(aes(x=data_TP3$T_tp,y=data_TP3$sort_tp))+
+  geom_function(fun=model_normal_tp,aes(color="NOR-LMOM"))+
+  geom_function(fun=model_lnormal_tp,aes(color="LN2-MLE"))+
+  geom_function(fun=model_gamma_tp,aes(color="GAM-LMOM"))+
+  geom_function(fun=model_p3_tp,aes(color="P3-LMOM"))+
+  geom_function(fun=model_lp3_tp,aes(color="LP3-MOM"))+
+  geom_function(fun=model_gev_tp,aes(color="GEV-LMOM"))+
+  geom_function(fun=model_gumbel_tp,aes(color="EV1-MLE"))+
+  geom_function(fun=model_weibull_tp,aes(color="W2-MLE"))+
+   
+ ylab(bquote('Discharge ('*~m^3/s*')')) +
+  xlab("Return Period (year)") +
+  guides(colour = guide_legend(title = ""))+
+  scale_y_continuous(breaks =seq(0,2000,200))
+```
+
+
+```{r}
+##apply the AIC and BIC test for flood frequency analysis models based on various distributions
+
+## NOR distribution
+loglick_model_norm_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qnorm(1-1/x,estimate_norm_mu_Lmom,estimate_norm_sigma_Lmom)))
+  return(ll)
+}
+Aic(loglick_model_norm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_norm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## LN2 distribution
+loglick_model_lnorm_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qlnorm(1-1/x,estimate_lnorm_mu_Mle,estimate_lnorm_sigma_Mle)))
+  return(ll)
+}
+Aic(loglick_model_lnorm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_lnorm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## EXP distribution
+loglick_model_exp_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qexp(1-1/x,estimate_exp_lambda_Mom)))
+  return(ll)
+}
+Aic(loglick_model_exp_tp(data_TP3$T_tp),1,length(data_TP3$T_tp))
+Bic(loglick_model_exp_tp(data_TP3$T_tp),1,length(data_TP3$T_tp))
+
+## GAM distribution
+loglick_model_gamma_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qgamma(1-1/x,estimate_gamma_beta_Lmom,1/estimate_gamma_alpha_Lmom)))
+  return(ll)
+}
+Aic(loglick_model_gamma_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_gamma_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## P3 distribution
+loglick_model_p3_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qgamma3(1-1/x,estimate_pearson3_shape_Lmom,estimate_pearson3_scale_Lmom,estimate_pearson3_location_Lmom)))
+  return(ll)
+}
+Aic(loglick_model_p3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_p3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+## LP3 distribution
+loglick_model_lp3_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(exp(invF.gamma(1-1/x
+,estimate_lpearson3_location_Mom,estimate_lpearson3_scale_Mom,estimate_lpearson3_shape_Mom))))
+  return(ll)
+}
+Aic(loglick_model_lp3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_lp3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+## GEV distribution
+loglick_model_gev_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(invF.GEV(1-1/x
+,estimate_gev_location_Lmom,estimate_gev_scale_Lmom,estimate_gev_shape_Lmom)))
+  return(ll)
+}
+Aic(loglick_model_gev_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_gev_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+## EV1 distribution
+loglick_model_gumbel_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(invF.gumb(1-1/x
+,estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle)))
+  return(ll)
+}
+Aic(loglick_model_gumbel_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_gumbel_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## W2 distribution
+loglick_model_w2_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qweibull(1-1/x,estimate_w2_shape_Mle,estimate_w2_scale_Mle)))
+  return(ll)
+}
+Aic(loglick_model_w2_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_w2_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+```
+
+```{r}
+## get the flood estimation with specific return period based on the most suitable distribution for this station
+return_period <- c(2,5,10,20,50,100,125,150)
+flood_estimation <- invF.gumb(1-1/return_period 
+,estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle)
+```
+
+#This part of the code is only used for the data of the station at Sprouston, we will get the figure including the curves of the flood frequency analysis models, which representing the distributions with their appropriate parameter estimation methods. And then we will use the AIC and BIC test for the flood frequency analysis models, and other test results we have got before.
+```{r}
+##the estimated data based on different distributions with suitable estimation methods 
+data_TP3$Estimate_X_norm_TP_mle <- Estimate_X_norm_TP_mle
+data_TP3$Estimate_X_lnorm_TP_mle <- Estimate_X_lnorm_TP_mle
+data_TP3$Estimate_X_exp_TP_mom <- Estimate_X_exp_TP_mom
+data_TP3$Estimate_X_gamma_TP_mle <- Estimate_X_gamma_TP_mle
+data_TP3$Estimate_X_p3_TP_mle <- Estimate_X_p3_TP_mle
+data_TP3$Estimate_X_lp3_TP_mle<- Estimate_X_lp3_TP_mle
+data_TP3$Estimate_X_gev_TP_mle<- Estimate_X_gev_TP_mle
+data_TP3$Estimate_X_gumbel_TP_mle <- Estimate_X_gumbel_TP_mle
+data_TP3$Estimate_X_w2_TP_mle <- Estimate_X_w2_TP_mle
+```
+
+```{r}
+##add all the lines representing the flood frequency analysis models in a plot
+model_normal_tp=function(x,y){
+  y=qnorm(1-1/x,estimate_norm_mu_Mle,estimate_norm_sigma_Mle)}
+
+model_lnormal_tp=function(x,y){
+  y=qlnorm(1-1/x,estimate_lnorm_mu_Mle,estimate_lnorm_sigma_Mle)}
+
+model_exp_tp=function(x,y){
+  y=qexp(1-1/x,estimate_exp_lambda_Mom)}
+
+model_gamma_tp=function(x,y){
+  y=qgamma(1-1/x,estimate_gamma_beta_Mle,1/estimate_gamma_alpha_Mle)}
+
+model_p3_tp=function(x,y){
+  y=qgamma3(1-1/x,estimate_pearson3_shape_Mle,estimate_pearson3_scale_Mle,estimate_pearson3_location_Mle)}
+
+model_lp3_tp=function(x,y){
+  y=exp(invF.gamma(1-1/x
+,estimate_lpearson3_location_Mle,estimate_lpearson3_scale_Mle,estimate_lpearson3_shape_Mle))}
+
+
+model_gev_tp=function(x,y){
+  y=invF.GEV(1-1/x
+,estimate_gev_location_Mle,estimate_gev_scale_Mle,estimate_gev_shape_Mle)}
+
+model_gumbel_tp=function(x,y){
+  y=invF.gumb(1-1/x
+,estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle)}
+
+model_weibull_tp=function(x,y){
+  y=qweibull(1-1/x
+,estimate_w2_shape_Mle,estimate_w2_scale_Mle)
+}
+```
+
+
+```{r}
+##make sure that the length of the return period is same as the length of the data set so that they can be put in a data frame used for the plot 
+T <- seq(1,150,150/(length(data_TP3$T_tp)))
+data_TP3$T <- T
+ggplot(data_TP3,aes(x=T))+
+  geom_point(aes(x=data_TP3$T_tp,y=data_TP3$sort_tp))+
+  geom_function(fun=model_normal_tp,aes(color="NOR-MLE/MOM"))+
+  geom_function(fun=model_lnormal_tp,aes(color="LN2-MLE"))+
+  geom_function(fun=model_exp_tp,aes(color="EXP-MLE/MOM/LMOM"))+
+  geom_function(fun=model_gamma_tp,aes(color="GAM-MLE"))+
+  geom_function(fun=model_p3_tp,aes(color="P3-MLE"))+
+  geom_function(fun=model_lp3_tp,aes(color="LP3-MLE"))+
+  geom_function(fun=model_gev_tp,aes(color="GEV-MLE"))+
+  geom_function(fun=model_gumbel_tp,aes(color="EV1-MLE"))+
+  geom_function(fun=model_weibull_tp,aes(color="W2-MLE"))+
+   
+ ylab(bquote('Discharge ('*~m^3/s*')')) +
+  xlab("Return Period (year)") +
+  guides(colour = guide_legend(title = ""))+
+  scale_y_continuous(breaks =seq(0,4000,300))
+
+
+ggplot(data_TP3,aes(x=T))+
+  geom_point(aes(x=data_TP3$T_tp,y=data_TP3$sort_tp))+
+  geom_function(fun=model_normal_tp,aes(color="NOR-LMOM"))+
+  geom_function(fun=model_lnormal_tp,aes(color="LN2-MLE"))+
+  geom_function(fun=model_gamma_tp,aes(color="GAM-LMOM"))+
+  geom_function(fun=model_p3_tp,aes(color="P3-LMOM"))+
+  geom_function(fun=model_lp3_tp,aes(color="LP3-MOM"))+
+  geom_function(fun=model_gev_tp,aes(color="GEV-LMOM"))+
+  geom_function(fun=model_gumbel_tp,aes(color="EV1-MLE"))+
+  geom_function(fun=model_weibull_tp,aes(color="W2-MLE"))+
+   
+ ylab(bquote('Discharge ('*~m^3/s*')')) +
+  xlab("Return Period (year)") +
+  guides(colour = guide_legend(title = ""))+
+  scale_y_continuous(breaks =seq(0,1700,200))
+```
+
+
+```{r}
+##Apply the AIC and BIC test for flood frequency analysis models based on various distributions
+
+## NOR distribution
+loglick_model_norm_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qnorm(1-1/x,estimate_norm_mu_Mle,estimate_norm_sigma_Mle)))
+  return(ll)
+}
+Aic(loglick_model_norm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_norm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+
+## LN2 distribution
+loglick_model_lnorm_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qlnorm(1-1/x,estimate_lnorm_mu_Mle,estimate_lnorm_sigma_Mle)))
+  return(ll)
+}
+Aic(loglick_model_lnorm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_lnorm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## EXP distribution
+loglick_model_exp_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qexp(1-1/x,estimate_exp_lambda_Mom)))
+  return(ll)
+}
+Aic(loglick_model_exp_tp(data_TP3$T_tp),1,length(data_TP3$T_tp))
+Bic(loglick_model_exp_tp(data_TP3$T_tp),1,length(data_TP3$T_tp))
+
+## GAM distribution
+loglick_model_gamma_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qgamma(1-1/x,estimate_gamma_beta_Mle,1/estimate_gamma_alpha_Mle)))
+  return(ll)
+}
+Aic(loglick_model_gamma_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_gamma_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## P3 distribution
+loglick_model_p3_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qgamma3(1-1/x,estimate_pearson3_shape_Mle,estimate_pearson3_scale_Mle,estimate_pearson3_location_Mle)))
+  return(ll)
+}
+Aic(loglick_model_p3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_p3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+## LP3 distribution
+loglick_model_lp3_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(exp(invF.gamma(1-1/x
+,estimate_lpearson3_location_Mle,estimate_lpearson3_scale_Mle,estimate_lpearson3_shape_Mle))))
+  return(ll)
+}
+Aic(loglick_model_lp3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_lp3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+## GEV distribution
+loglick_model_gev_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(invF.GEV(1-1/x
+,estimate_gev_location_Mle,estimate_gev_scale_Mle,estimate_gev_shape_Mle)))
+  return(ll)
+}
+Aic(loglick_model_gev_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_gev_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+##EV1 distribution
+loglick_model_gumbel_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(invF.gumb(1-1/x
+,estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle)))
+  return(ll)
+}
+Aic(loglick_model_gumbel_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_gumbel_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## W2 distribution
+loglick_model_w2_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qweibull(1-1/x,estimate_w2_shape_Mle,estimate_w2_scale_Mle)))
+  return(ll)
+}
+
+
+Aic(loglick_model_w2_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_w2_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+```
+
+```{r}
+##Get the flood estimation with specific return period based on the most suitable distribution for this station
+return_period <- c(2,5,10,20,50,100,125,150)
+flood_estimation <- invF.gumb(1-1/return_period
+,estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle)
+```
+
+#This part of the code is only used for the data of the station at Lyne Ford, we will get the figure including the curves of the flood frequency analysis models, which representing the distributions with their appropriate parameter estimation methods. And then we will use the AIC and BIC test for the flood frequency analysis models, and other test results we have got before.
+```{r}
+##the estimated data based on different distributions with suitable estimation methods  
+data_TP3$Estimate_X_norm_TP_mle <- Estimate_X_norm_TP_mle
+data_TP3$Estimate_X_lnorm_TP_mle <- Estimate_X_lnorm_TP_mle
+data_TP3$Estimate_X_exp_TP_mom <- Estimate_X_exp_TP_mom
+data_TP3$Estimate_X_gamma_TP_mle <- Estimate_X_gamma_TP_mle
+data_TP3$Estimate_X_p3_TP_mle <- Estimate_X_p3_TP_mle
+data_TP3$Estimate_X_lp3_TP_mle<- Estimate_X_lp3_TP_mle
+data_TP3$Estimate_X_gev_TP_mle<- Estimate_X_gev_TP_mle
+data_TP3$Estimate_X_gumbel_TP_mle <- Estimate_X_gumbel_TP_mle
+data_TP3$Estimate_X_w2_TP_mle <- Estimate_X_w2_TP_mle
+```
+
+```{r}
+##add all the lines representing the flood frequency analysis models in a plot
+model_normal_tp=function(x,y){
+  y=qnorm(1-1/x,estimate_norm_mu_Mle,estimate_norm_sigma_Mle)}
+
+model_lnormal_tp=function(x,y){
+  y=qlnorm(1-1/x,estimate_lnorm_mu_Mle,estimate_lnorm_sigma_Mle)}
+
+model_exp_tp=function(x,y){
+  y=qexp(1-1/x,estimate_exp_lambda_Mom)}
+
+model_gamma_tp=function(x,y){
+  y=qgamma(1-1/x,estimate_gamma_beta_Mle,1/estimate_gamma_alpha_Mle)}
+
+model_p3_tp=function(x,y){
+  y=qgamma3(1-1/x,estimate_pearson3_shape_Mle,estimate_pearson3_scale_Mle,estimate_pearson3_location_Mle)}
+
+model_lp3_tp=function(x,y){
+  y=exp(invF.gamma(1-1/x
+,estimate_lpearson3_location_Mle,estimate_lpearson3_scale_Mle,estimate_lpearson3_shape_Mle))}
+
+
+model_gev_tp=function(x,y){
+  y=invF.GEV(1-1/x
+,estimate_gev_location_Mle,estimate_gev_scale_Mle,estimate_gev_shape_Mle)}
+
+model_gumbel_tp=function(x,y){
+  y=invF.gumb(1-1/x
+,estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle)}
+
+model_weibull_tp=function(x,y){
+  y=qweibull(1-1/x
+,estimate_w2_shape_Mle,estimate_w2_scale_Mle)
+}
+```
+
+```{r}
+##make sure that the length of the return period is same as the length of the data set so that they can be put in a data frame used for the plot 
+T <- seq(2,150,150/(length(data_TP3$T_tp)))
+data_TP3$T <- T
+ggplot(data_TP3,aes(x=T))+
+  geom_point(aes(x=data_TP3$T_tp,y=data_TP3$sort_tp))+
+  geom_function(fun=model_normal_tp,aes(color="NOR-MLE/MOM"))+
+  geom_function(fun=model_lnormal_tp,aes(color="LN2-MLE"))+
+  geom_function(fun=model_exp_tp,aes(color="EXP-MLE/MOM/LMOM"))+
+  geom_function(fun=model_gamma_tp,aes(color="GAM-MLE"))+
+  geom_function(fun=model_p3_tp,aes(color="P3-MLE"))+
+  geom_function(fun=model_lp3_tp,aes(color="LP3-MLE"))+
+  geom_function(fun=model_gev_tp,aes(color="GEV-MLE"))+
+  geom_function(fun=model_gumbel_tp,aes(color="EV1-MLE"))+
+  geom_function(fun=model_weibull_tp,aes(color="W2-MLE"))+
+   
+ ylab(bquote('Discharge ('*~m^3/s*')')) +
+  xlab("Return Period (year)") +
+  guides(colour = guide_legend(title = ""))+
+  scale_y_continuous(breaks =seq(0,800,100))
+
+
+
+ggplot(data_TP3,aes(x=T))+
+  geom_point(aes(x=data_TP3$T_tp,y=data_TP3$sort_tp))+
+ geom_function(fun=model_normal_tp,aes(color="NOR-MLE/MOM"))+
+  geom_function(fun=model_lnormal_tp,aes(color="LN2-MLE"))+
+  geom_function(fun=model_gamma_tp,aes(color="GAM-MLE"))+
+  geom_function(fun=model_p3_tp,aes(color="P3-MLE"))+
+  geom_function(fun=model_lp3_tp,aes(color="LP3-MLE"))+
+  geom_function(fun=model_gev_tp,aes(color="GEV-MLE"))+
+  geom_function(fun=model_gumbel_tp,aes(color="EV1-MLE"))+
+  geom_function(fun=model_weibull_tp,aes(color="W2-MLE"))+
+   
+ ylab(bquote('Discharge ('*~m^3/s*')')) +
+  xlab("Return Period (year)") +
+  guides(colour = guide_legend(title = ""))+
+  scale_y_continuous(breaks =seq(0,500,50))
+```
+
+```{r}
+##Apply the AIC and BIC test for flood frequency analysis models based on various distributions
+
+## NOR distribution
+loglick_model_norm_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qnorm(1-1/x,estimate_norm_mu_Mle,estimate_norm_sigma_Mle)))
+  return(ll)
+}
+Aic(loglick_model_norm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_norm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## LN2 distribution
+loglick_model_lnorm_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qlnorm(1-1/x,estimate_lnorm_mu_Mle,estimate_lnorm_sigma_Mle)))
+  return(ll)
+}
+Aic(loglick_model_lnorm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_lnorm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## EXP distribution
+loglick_model_exp_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qexp(1-1/x,estimate_exp_lambda_Mom)))
+  return(ll)
+}
+Aic(loglick_model_exp_tp(data_TP3$T_tp),1,length(data_TP3$T_tp))
+Bic(loglick_model_exp_tp(data_TP3$T_tp),1,length(data_TP3$T_tp))
+
+## GAM distribution
+loglick_model_gamma_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qgamma(1-1/x,estimate_gamma_beta_Mle,1/estimate_gamma_alpha_Mle)))
+  return(ll)
+}
+Aic(loglick_model_gamma_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_gamma_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## P3 distribution
+loglick_model_p3_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qgamma3(1-1/x,estimate_pearson3_shape_Mle,estimate_pearson3_scale_Mle,estimate_pearson3_location_Mle)))
+  return(ll)
+}
+Aic(loglick_model_p3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_p3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+## LP3 distribution
+loglick_model_lp3_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(exp(invF.gamma(1-1/x
+,estimate_lpearson3_location_Mle,estimate_lpearson3_scale_Mle,estimate_lpearson3_shape_Mle))))
+  return(ll)
+}
+Aic(loglick_model_lp3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_lp3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+## GEV distribution
+loglick_model_gev_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(invF.GEV(1-1/x
+,estimate_gev_location_Mle,estimate_gev_scale_Mle,estimate_gev_shape_Mle)))
+  return(ll)
+}
+Aic(loglick_model_gev_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_gev_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+## EV1 distribution
+loglick_model_gumbel_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(invF.gumb(1-1/x
+,estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle)))
+  return(ll)
+}
+Aic(loglick_model_gumbel_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_gumbel_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## W2 distribution
+loglick_model_w2_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qweibull(1-1/x,estimate_w2_shape_Mle,estimate_w2_scale_Mle)))
+  return(ll)
+}
+Aic(loglick_model_w2_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_w2_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+```
+
+```{r}
+##Get the flood estimation with specific return period based on the most suitable distribution for this station
+return_period <- c(2,5,10,20,50,100,125,150)
+flood_estimation <- qnorm(1-1/return_period ,estimate_norm_mu_Mle,estimate_norm_sigma_Mle)
+```
+
+#This part of the code is only used for the data of the station at Boleside, we will get the figure including the curves of the flood frequency analysis models, which representing the distributions with their appropriate parameter estimation methods. And then we will use the AIC and BIC test for the flood frequency analysis models, and other test results we have got before.
+```{r}
+##the estimated data based on different distributions with suitable estimation methods 
+data_TP3$Estimate_X_norm_TP_lmom <- Estimate_X_norm_TP_lmom
+data_TP3$Estimate_X_lnorm_TP_lmom <- Estimate_X_lnorm_TP_lmom
+data_TP3$Estimate_X_exp_TP_mom <- Estimate_X_exp_TP_mom
+data_TP3$Estimate_X_gamma_TP_mle <- Estimate_X_gamma_TP_mle
+data_TP3$Estimate_X_p3_TP_mle <- Estimate_X_p3_TP_mle
+data_TP3$Estimate_X_lp3_TP_mle<- Estimate_X_lp3_TP_mle
+data_TP3$Estimate_X_gev_TP_lmom<- Estimate_X_gev_TP_lmom
+data_TP3$Estimate_X_gumbel_TP_mle <- Estimate_X_gumbel_TP_mle
+data_TP3$Estimate_X_w2_TP_mle <- Estimate_X_w2_TP_mle
+```
+
+```{r}
+##add all the lines representing the flood frequency analysis models in a plot
+model_normal_tp=function(x,y){
+  y=qnorm(1-1/x,estimate_norm_mu_Lmom,estimate_norm_sigma_Lmom)}
+
+model_lnormal_tp=function(x,y){
+  y=qlnorm(1-1/x,estimate_lnorm_mu_Lmom,estimate_lnorm_sigma_Lmom)}
+
+model_exp_tp=function(x,y){
+  y=qexp(1-1/x,estimate_exp_lambda_Mom)}
+
+model_gamma_tp=function(x,y){
+  y=qgamma(1-1/x,estimate_gamma_beta_Mle,1/estimate_gamma_alpha_Mle)}
+
+model_p3_tp=function(x,y){
+  y=qgamma3(1-1/x,estimate_pearson3_shape_Mle,estimate_pearson3_scale_Mle,estimate_pearson3_location_Mle)}
+
+model_lp3_tp=function(x,y){
+  y=exp(invF.gamma(1-1/x
+,estimate_lpearson3_location_Mle,estimate_lpearson3_scale_Mle,estimate_lpearson3_shape_Mle))}
+
+
+model_gev_tp=function(x,y){
+  y=invF.GEV(1-1/x
+,estimate_gev_location_Lmom,estimate_gev_scale_Lmom,estimate_gev_shape_Lmom)}
+
+model_gumbel_tp=function(x,y){
+  y=invF.gumb(1-1/x
+,estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle)}
+
+model_weibull_tp=function(x,y){
+  y=qweibull(1-1/x
+,estimate_w2_shape_Mle,estimate_w2_scale_Mle)
+}
+```
+
+```{r}
+##make sure that the length of the return period is same as the length of the data set so that they can be put in a data frame used for the plot
+T <- seq(2,150,150/(length(data_TP3$T_tp)))
+data_TP3$T <- T
+ggplot(data_TP3,aes(x=T))+
+  geom_point(aes(x=data_TP3$T_tp,y=data_TP3$sort_tp))+
+  geom_function(fun=model_normal_tp,aes(color="NOR-LMOM"))+
+  geom_function(fun=model_lnormal_tp,aes(color="LN2-LMOM"))+
+  geom_function(fun=model_exp_tp,aes(color="EXP-MLE/MOM/LMOM"))+
+  geom_function(fun=model_gamma_tp,aes(color="GAM-MLE"))+
+  geom_function(fun=model_p3_tp,aes(color="P3-MLE"))+
+  geom_function(fun=model_lp3_tp,aes(color="LP3-MLE"))+
+  geom_function(fun=model_gev_tp,aes(color="GEV-LMOM"))+
+  geom_function(fun=model_gumbel_tp,aes(color="EV1-MLE"))+
+  geom_function(fun=model_weibull_tp,aes(color="W2-MLE"))+
+   
+  ylab(bquote('Discharge ('*~m^3/s*')')) +
+  xlab("Return Period (year)") +
+  guides(colour = guide_legend(title = ""))+
+  scale_y_continuous(breaks =seq(0,3000,200))
+
+
+
+
+ggplot(data_TP3,aes(x=T))+
+  geom_point(aes(x=data_TP3$T_tp,y=data_TP3$sort_tp))+
+  geom_function(fun=model_normal_tp,aes(color="NOR-LMOM"))+
+  geom_function(fun=model_lnormal_tp,aes(color="LN2-LMOM"))+
+  geom_function(fun=model_gamma_tp,aes(color="GAM-MLE"))+
+  geom_function(fun=model_p3_tp,aes(color="P3-MLE"))+
+  geom_function(fun=model_lp3_tp,aes(color="LP3-MLE"))+
+  geom_function(fun=model_gev_tp,aes(color="GEV-LMOM"))+
+  geom_function(fun=model_gumbel_tp,aes(color="EV1-MLE"))+
+  geom_function(fun=model_weibull_tp,aes(color="W2-MLE"))+
+   
+  ylab(bquote('Discharge ('*~m^3/s*')')) +
+  xlab("Return Period (year)") +
+  guides(colour = guide_legend(title = ""))+
+  scale_y_continuous(breaks =seq(0,1000,100))
+```
+
+```{r}
+##Apply the AIC and BIC test for flood frequency analysis models based on various distributions
+
+## NOR distribution
+loglick_model_norm_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qnorm(1-1/x,estimate_norm_mu_Lmom,estimate_norm_sigma_Lmom)))
+  return(ll)
+}
+Aic(loglick_model_norm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_norm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## LN2 distribution
+loglick_model_lnorm_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qlnorm(1-1/x,estimate_lnorm_mu_Lmom,estimate_lnorm_sigma_Lmom)))
+  return(ll)
+}
+Aic(loglick_model_lnorm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_lnorm_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## EXP distribution
+loglick_model_exp_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qexp(1-1/x,estimate_exp_lambda_Mom)))
+  return(ll)
+}
+Aic(loglick_model_exp_tp(data_TP3$T_tp),1,length(data_TP3$T_tp))
+Bic(loglick_model_exp_tp(data_TP3$T_tp),1,length(data_TP3$T_tp))
+
+## GAM distribution
+loglick_model_gamma_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qgamma(1-1/x,estimate_gamma_beta_Mle,1/estimate_gamma_alpha_Mle)))
+  return(ll)
+}
+Aic(loglick_model_gamma_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_gamma_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## P3 distribution
+loglick_model_p3_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qgamma3(1-1/x,estimate_pearson3_shape_Mle,estimate_pearson3_scale_Mle,estimate_pearson3_location_Mle)))
+  return(ll)
+}
+Aic(loglick_model_p3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_p3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+## LP3 distribution
+loglick_model_lp3_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(exp(invF.gamma(1-1/x
+,estimate_lpearson3_location_Mle,estimate_lpearson3_scale_Mle,estimate_lpearson3_shape_Mle))))
+  return(ll)
+}
+Aic(loglick_model_lp3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_lp3_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+## GEV distribution
+loglick_model_gev_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(invF.GEV(1-1/x
+,estimate_gev_location_Lmom,estimate_gev_scale_Lmom,estimate_gev_shape_Lmom)))
+  return(ll)
+}
+Aic(loglick_model_gev_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+Bic(loglick_model_gev_tp(data_TP3$T_tp),3,length(data_TP3$T_tp))
+
+## EV1 distribution
+loglick_model_gumbel_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(invF.gumb(1-1/x
+,estimate_gumbel_location_Mle,estimate_gumbel_scale_Mle)))
+  return(ll)
+}
+Aic(loglick_model_gumbel_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_gumbel_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+
+## W2 distribution
+loglick_model_w2_tp <- function(x){
+  x <- as.matrix(x)
+  ll <-sum(log(qweibull(1-1/x,estimate_w2_shape_Mle,estimate_w2_scale_Mle)))
+  return(ll)
+}
+Aic(loglick_model_w2_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+Bic(loglick_model_w2_tp(data_TP3$T_tp),2,length(data_TP3$T_tp))
+```
+
+```{r}
+##Get the flood estimation with specific return period based on the most suitable distribution for this station
+return_period <- c(2,5,10,20,50,100,125,150)
+flood_estimation <- 
+invF.GEV(1-1/return_period
+,estimate_gev_location_Lmom,estimate_gev_scale_Lmom,estimate_gev_shape_Lmom)
+```
+
+#This part of the code is used for choosing the suitable distribution for the River Tweed. We will apply the L-moment ratio diagrams in this part. To prevent the errors, this part we will input the data set of the five stations and the code in this part has no relationship with the code used before.
+
+```{r}
+
+##input the data of the five stations 
+setwd('C:/Users/Stephanie/Desktop/dissertation')
+data_Peebles <- read.csv("Tweed-Peebles.csv")
+data_Norham <- read.csv("Tweed-Norham.csv")
+data_Sprouston <- read.csv("Tweed-Sprouston.csv")
+data_LF <- read.csv("Tweed-Lyne Ford.csv")
+data_BS <- read.csv("Tweed-Boleside.csv")
+
+##We first get the l-skewness vs l-kurtosis plot
+###get the l-skewness and l-kurtosis of the data in five stations
+data_Peebles_out <- boxplot.stats(data_Peebles$peak.flow)$out
+data_Peebles2 <- if(length(data_Peebles_out)==0) data_Peebles else data_Peebles[-c(which(data_Peebles$peak.flow %in% c(data_Peebles_out))),]
+
+tau3_peebles <- samlmu(data_Peebles2 $peak.flow)[[3]]
+tau4_peebles <- samlmu(data_Peebles2 $peak.flow)[[4]]
+
+data_point_Peebles <- data.frame(x=tau3_peebles, y=tau4_peebles)
+
+
+data_Norham_out <- boxplot.stats(data_Norham$peak.flow)$out
+data_Norham2 <- if(length(data_Norham_out)==0) data_Norham else data_Norham[-c(which(data_Norham$peak.flow %in% c(data_Norham_out))),]
+
+tau3_norham <- samlmu(data_Norham2$peak.flow)[[3]]
+tau4_norham <- samlmu(data_Norham2 $peak.flow)[[4]]
+
+data_point_Norham <- data.frame(x=tau3_norham,y=tau4_norham)
+
+data_Sprouston_out <- boxplot.stats(data_Sprouston$peak.flow)$out
+data_Sprouston2 <- if(length(data_Sprouston_out)==0) data_Sprouston else data_Sprouston[-c(which(data_Sprouston$peak.flow %in% c(data_Sprouston_out))),]
+
+tau3_sprouston <- samlmu(data_Sprouston2$peak.flow)[[3]]
+tau4_sprouston <- samlmu(data_Sprouston2$peak.flow)[[4]]
+
+data_point_Sprouston<- data.frame(x=tau3_sprouston,y=tau4_sprouston)
+
+data_LF_out <- boxplot.stats(data_LF$peak.flow)$out
+data_LF2 <- if(length(data_Peebles_out)==0) data_LF else data_LF[-c(which(data_LF$peak.flow %in% c(data_LF_out))),]
+
+tau3_lf <- samlmu(data_LF2 $peak.flow)[[3]]
+tau4_lf <- samlmu(data_LF2 $peak.flow)[[4]]
+
+data_point_LF<- data.frame(x=tau3_lf,y=tau4_lf)
+
+data_BS_out <- boxplot.stats(data_BS$peak.flow)$out
+data_BS2 <- if(length(data_Peebles_out)==0) data_BS else data_BS[-c(which(data_BS$peak.flow %in% c(data_BS_out))),]
+
+tau3_bs <- samlmu(data_BS2 $peak.flow)[[3]]
+tau4_bs <- samlmu(data_BS2 $peak.flow)[[4]]
+
+data_point_BS<- data.frame(x=tau3_bs,y=tau4_bs)
+
+###prepare the l-skewness and l-kurtosis used for the curves of distributions
+L_skewness <- seq(-0.2,0.6,by=0.01)
+L_kurtosis <- seq(-0.2,0.6,by=0.01)
+###define the functions related to the GEV and P3 distributions about the relationship between the l-skewness and l-kurtosis
+function_gev = function(x,y){
+  y=0.10701+0.11090*x+0.84838*x^2-0.06669*x^3+0.00567*x^4-0.04208*x^5+0.03763*x^6}
+function_p3=function(x,y){
+  y=0.1224+0.30115*x^2+0.95812*x^4-0.57488*x^6+0.19383*x^8
+}
+###get the points related to the EV1, EXP, NOR distributions since they have the fixed values of l-skewness and l-kurtosis
+data_point_EV1 <- data.frame(x=0.1699,y=0.1504)
+data_point_EXP <- data.frame(x=1/3,y=1/6)
+data_point_NOR <- data.frame(x=0,y=0.1226)
+```
+
+
+```{r}
+### plot the figure including GEV and P3 curves, sample points, and the EV1, NOR, and EXP points
+data <- data.frame(L_skewness,L_kurtosis)
+ggplot(data,aes(x=L_skewness,y=L_kurtosis))+
+   geom_function(fun=function_gev,aes(color="GEV"))+
+   geom_function(fun=function_p3,aes(color="P3"))+
+   geom_point(aes(x=0.1699,y=0.1504),shape=1,size=4,color="red",label="EV1")+
+   geom_point(aes(x=1/3,y=1/6),shape=7,size=4,color="red")+
+   geom_point(aes(x=0,y=0.1226),shape=6,size=4,color="red")+
+   geom_point(aes(x=tau3_peebles,y=tau4_peebles),size=2,color="black")+
+   geom_point(aes(x=tau3_norham,y=tau4_norham), size=2,color="black")+
+   geom_point(aes(x=tau3_sprouston,y=tau4_sprouston),size=2,color="black")+
+  geom_point(aes(x=tau3_lf,y=tau4_lf),size=2,color="black")+
+   geom_point(aes(x=tau3_bs,y=tau4_bs),size=2,color="black")+
+   geom_text(data = data_point_EV1, aes(x = x*1.35, y = y,label = "EV1"),color="red")+
+   geom_text(data = data_point_EXP, aes(x = x*1.13, y = y*1.1, label = "EXP"),color="red")+
+  geom_text(data = data_point_NOR, aes(x = x, y = y*1.1, label = "NOR"),color="red")+
+   geom_text(data = data_point_Peebles, aes(x = x, y = y*1.05, label = "Peebles"),size=3)+
+   geom_text(data = data_point_Norham, aes(x = x*1.05, y = y*0.95, label = "Norham"),size=3)+
+   geom_text(data = data_point_Sprouston, aes(x = x, y = y*1.1, label = "Sprouston"),size=3)+
+   geom_text(data = data_point_LF, aes(x = x*0.8, y = y*1.05, label = "Lyne Ford"),size=3)+
+   geom_text(data = data_point_BS, aes(x = x*0.8, y = y*0.9, label = "Boleside"),size=3)+
+ ylab("L-Kurtosis") +
+  xlab("L-Skewness")+
+   guides(colour = guide_legend(title = ""))
+```
+
+```{r}
+###Then we get the l-skewness vs l-kurtosis plot for lp3.
+###get the l-skewness and l-kurtosis of the logarithms of the data
+
+tau3_peebles_log <- samlmu(log(data_Peebles2$peak.flow))[[3]]
+tau4_peebles_log <- samlmu(log(data_Peebles2$peak.flow))[[4]]
+
+data_point_Peebles_log <- data.frame(x=tau3_peebles_log, y=tau4_peebles_log)
+
+
+tau3_norham_log <- samlmu(log(data_Norham2$peak.flow))[[3]]
+tau4_norham_log <- samlmu(log(data_Norham2$peak.flow))[[4]]
+
+data_point_Norham_log <- data.frame(x=tau3_norham_log, y=tau4_norham_log)
+
+tau3_sprouston_log <- samlmu(log(data_Sprouston2$peak.flow))[[3]]
+tau4_sprouston_log <- samlmu(log(data_Sprouston2$peak.flow))[[4]]
+
+data_point_Sprouston_log <- data.frame(x=tau3_sprouston_log, y=tau4_sprouston_log)
+
+tau3_lf_log <- samlmu(log(data_LF2$peak.flow))[[3]]
+tau4_lf_log <- samlmu(log(data_LF2$peak.flow))[[4]]
+
+data_point_LF_log <- data.frame(x=tau3_lf_log, y=tau4_lf_log)
+
+tau3_bs_log <- samlmu(log(data_BS2$peak.flow))[[3]]
+tau4_bs_log <- samlmu(log(data_BS2$peak.flow))[[4]]
+
+data_point_BS_log <- data.frame(x=tau3_bs_log, y=tau4_bs_log)
+```
+
+
+```{r}
+### plot the figure including P3 curve and sample points
+data <- data.frame(L_skewness,L_kurtosis)
+ggplot(data,aes(x=L_skewness,y=L_kurtosis))+
+   geom_function(fun=function_p3,aes(color="P3"))+
+   geom_point(aes(x=tau3_peebles_log,y=tau4_peebles_log),size=2,color="black")+
+   geom_point(aes(x=tau3_norham_log,y=tau4_norham_log),size=2,color="black")+
+   geom_point(aes(x=tau3_sprouston_log,y=tau4_sprouston_log),size=2,color="black")+
+   geom_point(aes(x=tau3_lf_log,y=tau4_lf_log),size=2,color="black")+
+   geom_point(aes(x=tau3_bs_log,y=tau4_bs_log),size=2,color="black")+
+   geom_text(data = data_point_Peebles_log, aes(x = x*4.5, y = y, label = "Peebles"),size=3)+
+   geom_text(data = data_point_Norham_log, aes(x = x*4.5, y = y*0.95, label = "Norham"),size=3)+
+   geom_text(data = data_point_Sprouston_log, aes(x = x*8, y = y, label = "Sprouston"),size=3)+
+  geom_text(data = data_point_LF_log, aes(x = x, y = y*1.05, label = "Lyne Ford"),size=3)+
+   geom_text(data = data_point_BS_log, aes(x = x, y = y*0.9, label = "Boleside"),size=3)+
+ ylab("L-Kurtosis") +
+  xlab("L-Skewness")+
+   guides(colour = guide_legend(title = ""))
+  
+```
+
+```{r}
+##Next, we get the l-cv vs l-kurtosis plot
+###get the l-cv and l-skewness of the data in five stations
+L_cv <- seq(-0.2,0.6,by=0.01)
+function_ln2 = function(x,y){
+  y=1.16008*x-0.05325*x^2-0.10501*x^4-0.00103*x^6}
+function_gamma=function(x,y){
+  y=1.74139*x-2.59736*x^3+2.09911*x^4-0.35948*x^6
+}
+function_w2=function(x,y){
+  y=0.17864+1.02381*x-0.17878*x^2-0.00894*x^4-0.01443*x^6
+}
+
+tau2_peebles <- samlmu(data_Peebles2$peak.flow)[[2]]/samlmu(data_Peebles2$peak.flow)[[1]]
+
+data_point_Peebles2 <- data.frame(x=tau3_peebles, y=tau2_peebles)
+
+tau2_norham <- samlmu(data_Norham2$peak.flow)[[2]]/samlmu(data_Norham2$peak.flow)[[1]]
+
+data_point_Norham2 <- data.frame(x=tau3_norham, y=tau2_norham)
+
+tau2_sprouston <- samlmu(data_Sprouston2$peak.flow)[[2]]/samlmu(data_Sprouston2$peak.flow)[[1]]
+
+data_point_Sprouston2 <- data.frame(x=tau3_sprouston, y=tau2_sprouston)
+
+tau2_lf <- samlmu(data_LF2$peak.flow)[[2]]/samlmu(data_LF2$peak.flow)[[1]]
+
+data_point_LF2 <- data.frame(x=tau3_lf, y=tau2_lf)
+
+tau2_bs <- samlmu(data_BS2$peak.flow)[[2]]/samlmu(data_BS2$peak.flow)[[1]]
+
+data_point_BS2 <- data.frame(x=tau3_lf, y=tau2_lf)
+
+```
+
+```{r}
+### plot the figure including GAM, LN2, and W2 curves,and also the sample points
+data2 <- data.frame(L_cv,L_skewness)
+ggplot(data2,aes(x=L_skewness,y=L_cv))+
+   geom_function(fun=function_ln2,aes(color="LN2"))+
+   geom_function(fun=function_gamma,aes(color="GAM"))+
+  geom_function(fun=function_w2,aes(color="W2"))+
+   geom_point(aes(x=tau3_peebles,y=tau2_peebles),size=2,color="black")+
+   geom_point(aes(x=tau3_norham,y=tau2_norham),size=2,color="black")+
+   geom_point(aes(x=tau3_sprouston,y=tau2_sprouston),size=2,color="black")+
+  geom_point(aes(x=tau3_lf,y=tau2_lf),size=2,color="black")+
+   geom_point(aes(x=tau3_bs,y=tau2_bs),size=2,color="black")+
+   geom_text(data = data_point_Peebles2, aes(x = x*1.25, y = y*1.2, label = "Peebles"),size=3)+
+   geom_text(data = data_point_Norham2, aes(x = x, y = y*1.25, label = "Norham"),size=3)+
+   geom_text(data = data_point_Sprouston2, aes(x = x*1.4, y = y*0.9, label = "Sprouston"),size=3)+
+  geom_text(data = data_point_LF2, aes(x = x*0.4, y = y*1.2, label = "Lyne Ford"),size=3)+
+  geom_text(data = data_point_LF2, aes(x = x*0.95, y = y*0.8, label = "Boleside"),size=3)+
+ ylab("L-CV") +
+  xlab("L-Skewness")+
+   guides(colour = guide_legend(title = ""))
+```
+
+
+
+
+
+
+
+
+
+
